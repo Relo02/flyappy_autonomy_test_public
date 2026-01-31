@@ -11,6 +11,19 @@ This document summarizes the design and implementation details of the sampling-b
 - Goal: let the bird traverse an asteroid field as fast as possible in a fixed time window (one minute), passing through vertical gaps while avoiding collisions.
 - Approach: sampling-based (random shooting) MPC that evaluates many candidate constant-acceleration rollouts over a finite horizon using a simple 2D point-mass dynamics model integrated with RK4. Obstacle memory and inflation are provided by a Probabilistic Grid Map that accumulates lidar scans over time.
 
+# MPC Path Planner and Probabilistic Grid Map
+
+This document summarizes the design and implementation details of the sampling-based Model Predictive Controller (MPC) used for the Flyappy agent, the Probabilistic Grid Map used for obstacle memory and inflation, mathematical formulation, observed results, plotting/diagnostics, and concluding remarks about trade-offs between precision and speed.
+
+**Repository file:** [flyappy_ros.py](flyappy_autonomy_code_py/src/flyappy_autonomy_code/flyappy_ros.py)
+
+---
+
+## 1. High-level overview
+
+- Goal: let the bird traverse an asteroid field as fast as possible in a fixed time window (one minute), passing through vertical gaps while avoiding collisions.
+- Approach: sampling-based (random shooting) MPC that evaluates many candidate constant-acceleration rollouts over a finite horizon using a simple 2D point-mass dynamics model integrated with RK4. Obstacle memory and inflation are provided by a Probabilistic Grid Map that accumulates lidar scans over time.
+
 Key components:
 - Sampling & rollout generator (ax, ay samples per candidate)
 - RK4 integrator for predicted states
@@ -24,8 +37,8 @@ Key components:
 
 We model the bird as a 2D point with state (x, y, vx, vy) and control as constant accelerations (ax, ay) and the continuous-time dynamics:
 
-$$ \dot x = v_x, \quad \dot y = v_y $$
-$$ \dot v_x = a_x, \quad \dot v_y = a_y $$
+$$ \dot x = v_x, \\quad \dot y = v_y $$
+$$ \dot v_x = a_x, \\quad \dot v_y = a_y $$
 
 For a fixed acceleration control over a step of duration $\Delta t$, the numerical integrator used is RK4 applied to the position / velocity vectors. For each candidate path the integrator advances for $H$ steps (horizon length). The RK4 update used in code (vectorized) computes new position and velocity at each sub-step; the update is a 4th-order accurate single-step integrator.
 
@@ -90,7 +103,7 @@ Candidate selection picks the control with minimum total cost.
 
 ## 5. Collision checking and probabilistic grid map
 
-Given that the provided laser scans data are sparse, the planner uses a Probabilistic Grid Map (PGM) to maintain a memory of obstacles over time and provide inflated obstacle positions for collision checking. If we directly plug in the row laser scans, the bird may collide with obstacles since the scans are instantaneous and sparse, thus they don't capture enough enviroment morphology information. 
+Given that the provided laser scans data are sparse, the planner uses a Probabilistic Grid Map (PGM) to maintain a memory of obstacles over time and provide inflated obstacle positions for collision checking. If we directly plug in the row laser scans, the bird may collide with obstacles since the scans are instantaneous and sparse, thus they don't capture enough environment morphology information.
 The Probabilistic Grid Map (PGM) stores occupancy belief on a local 2D grid and is updated from latest lidar scans, with scan points transformed in local coordinates using the current bird pose / velocity estimate. The PGM responsibilities:
 
 - Fuse multiple scans over time to maintain memory of obstacles that temporarily leave the instantaneous scan (useful when passing behind obstacles or occlusions).
@@ -136,9 +149,10 @@ Short summary of experiments and observed outcomes:
 
 You can preview a compressed MP4 (better for GitHub rendering) and the original GIF as fallback:
 
-GIF (fallback):
+- MP4: [results/mpc_planner.mp4](results/mpc_planner.mp4)
+- GIF:
 
-![MPC Planner Demo](../flyappy_autonomy_code_py/gif/mpc_planner.gif)
+![MPC Planner Demo](flyappy_autonomy_code_py/gif/mpc_planner.gif)
 
 ---
 
@@ -147,19 +161,19 @@ GIF (fallback):
 For the project goal — maximizing forward speed while surviving for one minute and passing through asteroids — the planner must balance two competing objectives:
 
 1. Precision / Safety: higher obstacle penalties, larger horizons, and conservative sampling favor safe trajectories with large clearances but often result in slower average forward speed because the bird avoids risky but shorter paths.
-By choosing larger horizons with this MPC approach, the future propagated predictions would allow to explore in advance the possible paths and in principle select the cheeper one. However, witha a sample based MPC, increasing too much the hodizon will result in a sparser exploration of the action space, which can lead to less optimal paths without prioritizing clearance for guaranteed safety.
+By choosing larger horizons with this MPC approach, the future propagated predictions would allow to explore in advance the possible paths and in principle select the cheeper one. However, with a sample based MPC, increasing too much the horizon will result in a sparser exploration of the action space, which can lead to less optimal paths without prioritizing clearance for guaranteed safety.
 
 2. Speed / Aggressiveness: biasing `a_x` toward a larger `TARGET_VX`, lowering jerk/effort penalties, and reducing obstacle-cost scale let the bird commit to narrower gaps and travel faster, but increase collision risk especially if the grid map is noisy or the lidar FOV misses obstacles during the pass.
 
 Summary: pushing for maximum speed requires careful risk-aware relaxation of obstacle penalties combined with robust gap detection and per-rollout clearance evaluation. The approach in `flyappy_ros.py` provides several levers (sampling bias, clearance cost, perturbation) to manage this trade-off.
-The main drowback of this sampling-based MPC is that it can be sensible to local minima when the gap is not partially visible in the lidar FOV.
-I've choosen sampling-based MPC for its good robustness against modeling errors, non-linearities and non-convex obstacle shapes, at the cost of computational efficiency and optimality guarantees. It is also well suited for real-time operation on limited hardware since it can be parallelized and vectorized easily.
+The main drawback of this sampling-based MPC is that it can be sensitive to local minima when the gap is not partially visible in the lidar FOV.
+I chose sampling-based MPC for its good robustness against modeling errors, non-linearities and non-convex obstacle shapes, at the cost of computational efficiency and optimality guarantees. It is also well suited for real-time operation on limited hardware since it can be parallelized and vectorized easily.
 
 ---
 
 ## 10. Next steps & improvements
 
-Reinforcement learning (RL) can practically complement the sampling-based MPC in several ways, with the a following pipeline implementation that can be used:
+Reinforcement learning (RL) can practically complement the sampling-based MPC in several ways. Recommended pipeline:
 
 1. Bootstrap: collect MPC rollouts and label the best-rollout actions (state → best (ax,ay)) to build an offline dataset.
 2. Behavior cloning (BC): train a lightweight policy on the dataset for fast inference and good initialization.
@@ -167,5 +181,19 @@ Reinforcement learning (RL) can practically complement the sampling-based MPC in
 4. Hybrid integration: use the trained policy to bias MPC sampling (policy proposes high-probability samples) and keep MPC as a safety filter (policy proposes, MPC vetoes).
 
 ---
+
+
+---
+
+## How to run
+
+```bash
+# source your ROS2 distro (example)
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select flyappy_autonomy_code_py
+source install/setup.bash
+# start the main node
+ros2 run flyappy_autonomy_code_py flyappy_autonomy_code_node
+```
 
 Authored:  Lorenzo Ortolani.

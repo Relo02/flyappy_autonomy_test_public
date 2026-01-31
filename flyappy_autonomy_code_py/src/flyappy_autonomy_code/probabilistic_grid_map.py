@@ -19,8 +19,8 @@ class ProbabilisticGridMap:
         self.GRID_RESOLUTION = 0.1  # 10cm cells
         self.MAP_SIZE_X = 60  # 6m ahead (in cells)
         self.MAP_SIZE_Y = 60  # 6m vertically (in cells)
-        self.MAX_MAP_RAYS = 2.0 # before 1.5
-        self.MIN_MAP_RAYS = -2.0 # before -1.5
+        self.MAX_MAP_RAYS = 2.5 # before 1.5
+        self.MIN_MAP_RAYS = -2.5 # before -1.5
 
         # Game boundary constraints (global Y coordinates)
         # These must match the game geometry: ground=-1.35m, ceiling=+2.44m

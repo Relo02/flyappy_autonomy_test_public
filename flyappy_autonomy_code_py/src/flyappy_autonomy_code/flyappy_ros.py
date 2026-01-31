@@ -40,8 +40,8 @@ class FlyappyRos():
         self.MIN_VX = -1.5
         
         # Sensor Thresholds
-        self.MAX_OBSTACLE_RANGE = 2.0   # Ignore far obstacles to focus on immediate threat
-        self.MIN_OBSTACLES_COUNT = 2.0
+        self.MAX_OBSTACLE_RANGE = 2.5   # Ignore far obstacles to focus on immediate threat
+        self.MIN_OBSTACLES_COUNT = 2.5
 
         # Boundary Constraints (Global Y coordinates)
         self.Y_GROUND = -1.30

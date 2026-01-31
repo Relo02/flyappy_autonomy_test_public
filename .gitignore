@@ -4,7 +4,6 @@ flyappy_autonomy_code_py/build/
 flyappy_autonomy_code_py/log
 flyappy_autonomy_code_py/myenv/
 flyappy_autonomy_code_py/.venv/
-flyappy_autonomy_code_py/resource/
 *.pyc
 *.egg-info/
 *.egg
