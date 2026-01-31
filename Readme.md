@@ -2,7 +2,7 @@
 
 This document summarizes the design and implementation details of the sampling-based Model Predictive Controller (MPC) used for the Flyappy agent, the Probabilistic Grid Map used for obstacle memory and inflation, mathematical formulation, observed results, plotting/diagnostics, and concluding remarks about trade-offs between precision and speed.
 
-**Repository file:** [flyappy_ros.py](flyappy_autonomy_code_py/src/flyappy_autonomy_code/flyappy_ros.py)
+**Repository file:** [flyappy_ros.py](flyappy_autonomy_code_py/src/flyappy_autonomy_code/flyappy_ros.py), [probabilistic_grid_map.py](flyappy_autonomy_code_py/src/flyappy_autonomy_code/probabilistic_grid_map.py)
 
 ---
 
