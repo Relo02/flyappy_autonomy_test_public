@@ -173,7 +173,7 @@ I chose sampling-based MPC for its good robustness against modeling errors, non-
 
 ## 10. Next steps & improvements
 
-Reinforcement learning (RL) can practically complement the sampling-based MPC in several ways. Recommended pipeline:
+Reinforcement learning (RL) can practically complement the sampling-based MPC in several ways. Possible pipeline implementation:
 
 1. Bootstrap: collect MPC rollouts and label the best-rollout actions (state → best (ax,ay)) to build an offline dataset.
 2. Behavior cloning (BC): train a lightweight policy on the dataset for fast inference and good initialization.
