@@ -135,7 +135,7 @@ Short summary of experiments and observed outcomes:
 ### Video proof:
 
 ```
-![Alt text](https://github.com/Relo02/flyappy_autonomy_test_public/blob/master/flyappy_autonomy_code_py/gif/mpc_planner.gif?raw=true)
+![MPC Planner Demo](https://raw.githubusercontent.com/Relo02/flyappy_autonomy_test_public/master/flyappy_autonomy_code_py/gif/mpc_planner.gif)
 ```
 
 ## 9. Plotting & diagnostics
