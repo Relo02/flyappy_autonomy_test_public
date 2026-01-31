@@ -27,7 +27,7 @@ class FlyappyRos():
         # ==========================================
         # 1. MPC & Simulation Parameters
         # ==========================================
-        self.HORIZON = 25           # Lookahead steps (shorter = more reactive)
+        self.HORIZON = 30           # Lookahead steps (longer helps reach gaps)
         self.DT = 0.033             # Time step (30Hz)
         self.NUM_PATHS = 200        # Number of candidate trajectories sampled
         
@@ -37,20 +37,20 @@ class FlyappyRos():
         self.BIRD_RADIUS = 0.05         # 5cm physical radius
         self.OBSTACLE_INFLATION = 0.1   # Buffer zone around obstacles
         self.MAX_VX = 1.5               # Velocity cap for stability
-        self.MIN_VX = 0.0
+        self.MIN_VX = -1.5
         
         # Sensor Thresholds
-        self.MAX_OBSTACLE_RANGE = 5.0   # Ignore far obstacles to focus on immediate threat
+        self.MAX_OBSTACLE_RANGE = 2.0   # Ignore far obstacles to focus on immediate threat
         self.MIN_OBSTACLES_COUNT = 2.0
 
         # Boundary Constraints (Global Y coordinates)
         self.Y_GROUND = -1.30
         self.Y_CEILING = 2.40
-        self.Y_SAFE_MARGIN = 0.15       # Buffer from ceiling/ground
+        self.Y_SAFE_MARGIN = 0.5       # Buffer from ceiling/ground
 
         # Acceleration Limits (Conservative for survival)
-        self.MAX_ACC_X = 0.5
-        self.MAX_ACC_Y = 0.5            # Low Y acc prevents oscillation
+        self.MAX_ACC_X = 1.5
+        self.MAX_ACC_Y = 2.5            # Increase Y capability to reach gaps
         self.SAFE_ACC_X = self.MAX_ACC_X
         self.SAFE_ACC_Y = self.MAX_ACC_Y
 
@@ -59,19 +59,43 @@ class FlyappyRos():
         # ==========================================
         self.COLLISION_COST = 100000.0      # Instant death penalty
         self.BOUNDARY_WEIGHT = 50000.0      # Stay away from floor/ceiling
-        self.STOP_LIMIT = 0.05              # X threshold for backward penalty
-        self.SAFETY_DIST = 0.5              # Hard safety halo
+        self.STOP_LIMIT = 0.1              # X threshold for backward penalty
+        self.SAFETY_DIST = 1.0              # Hard safety halo, before 0.5
         
         # Tuning Weights
-        self.JERK_WEIGHT = 10.0             # Smoothness is priority
-        self.EFFORT_WEIGHT = 10.0           # Minimize energy usage
-        self.SPEED_Y_WEIGHT = 2.0           # Penalize vertical velocity (damping)
+        # Jerk weight: lower so the controller can change acceleration (allows dumping)
+        self.JERK_WEIGHT = 20.0
+        # Effort: moderate penalty
+        self.EFFORT_WEIGHT = 30.0
+        # Vertical velocity penalty: keep moderate so reaching gaps is possible
+        self.SPEED_Y_WEIGHT = 10.0
         self.SPEED_X_WEIGHT = 5.0           # Maintain forward momentum
-        self.Y_ERROR_WEIGHT = 10.0          # Gap attraction strength
+        # Increase gap attraction to prioritize moving toward gap
+        self.Y_ERROR_WEIGHT = 60.0
+        # Horizontal approach weight for steering toward gap X position
+        self.X_ERROR_WEIGHT = 20.0
+        # Trajectory obstacle penalty (encourage larger clearance along rollouts)
+        self.OBSTACLE_COST_WEIGHT = 10.0
+        # Collision radius used for hard collision checks during rollouts
+        self.COLLISION_RADIUS = 0.12
+        # Reward for forward progress (reduces cost for trajectories that move forward)
+        self.FORWARD_REWARD_WEIGHT = 2.0 # (before 5.0)
+        # Forward-block detection parameters (discretize FOV in X and Y offsets)
+        self.FWD_BIN_START = 0.2
+        self.FWD_BIN_END = 1.4
+        self.FWD_BIN_COUNT = 6
+        self.FWD_BIN_HALF_WIDTH = 0.12
+        self.FWD_Y_OFFSETS = np.array([-1.5, -0.5, 0.0, 0.5, 1.5])
+        self.FWD_Y_WINDOW = 0.20
+        self.FWD_BLOCKED_THRESHOLD = 0.75
+        # Diagnostic state for forward-block checks
+        self.last_forward_block_frac = 0.0
+        self.last_occupied_bins = 0
+        self.last_forward_bin_count = self.FWD_BIN_COUNT
         self.VX_MAX_WEIGHT = 1.0            # Speed limit penalty
         self.BACKWARD_PENALTY_WEIGHT = 2.0  
         self.BASE_REWARD = 1.0              
-        self.TARGET_VX = 0.3                # Desired cruising speed
+        self.TARGET_VX = 0.3                # Desired cruising speed (bias forward to reach gaps)
 
         # ==========================================
         # 4. State Management
@@ -79,6 +103,7 @@ class FlyappyRos():
         self.current_vel = np.array([0.0, 0.0])
         self.last_acc = np.array([0.0, 0.0])
         self.pos_y = 0.0
+        self.pos_x = 0.0
         self.obstacles = np.empty((0, 2))
         self.scan_received = False
         self.last_scan_time = None
@@ -90,12 +115,27 @@ class FlyappyRos():
         self.farthest_point_target = None
         self.LOW_SPEED_THRESHOLD = 0.70 
 
+        # Gap queue: maintain ordered planned gaps. MPC targets queue head until reached.
+        self.gap_queue = []  # list of dicts: {'center': np.array, 'size': float, 't': timestamp}
+        self.GAP_QUEUE_MAX = 4
+        self.GAP_TTL = 1.5          # seconds before a queued gap expires
+        self.GAP_REACHED_Y = 0.05   # vertical threshold (m) to consider a gap reached
+        self.GAP_REACHED_X = 0.10   # forward distance (m) threshold to consider gap reached
+        self.GAP_SIMILAR_DIST = 0.25 # distance to consider two gaps the same
+        self.GAP_MIN_ACCEPT_SIZE = 0.4  # if all gaps <= this, consider stuck and perturb
+        self.GAP_WAIT_AFTER_REACHED = 3.0  # seconds to wait after a gap is first reached
+        # Gap pass logging / state
+        self.LOG_GAP_PASS = True
+        self.gap_passed = False
+        self.last_gap_pass_t = None
+        self.GAP_PASS_TTL = 4.0     # seconds to keep `gap_passed` True after pass
+
         # Perturbation Logic (Anti-Stuck)
         self.min_obstacle_dist = float('inf')
         self.stuck_counter = 0
         self.STUCK_DIST_THRESHOLD = 0.0
         self.STUCK_VEL_THRESHOLD = 0.0
-        self.STUCK_FRAMES_TRIGGER = 8
+        self.STUCK_FRAMES_TRIGGER = 4
         self.perturbation_direction = 1
         self.perturbation_active = False
         self.perturbation_frames = 0
@@ -144,6 +184,7 @@ class FlyappyRos():
         """Updates bird state (velocity and approximate Y position integration)."""
         self.current_vel = np.array([msg.x, msg.y])
         self.pos_y += msg.y * self.DT
+        self.pos_x += msg.x * self.DT
 
     def find_largest_gap(self, scan_points):
         """
@@ -179,9 +220,47 @@ class FlyappyRos():
             g = sorted_y[i+1, 1] - sorted_y[i, 1]
             if g > max_gap:
                 max_gap = g
-                center = np.array([target_x, (sorted_y[i+1, 1] + sorted_y[i, 1]) / 2.0])
+                center = np.array([target_x + 0.2, (sorted_y[i+1, 1] + sorted_y[i, 1]) / 2.0])
 
         return center, max_gap
+
+    def is_gap_similar(self, a, b):
+        """Return True if two gap centers are within a small distance."""
+        if a is None or b is None:
+            return False
+        return np.linalg.norm(np.array(a) - np.array(b)) < self.GAP_SIMILAR_DIST
+
+    def is_gap_reached(self, gap_center):
+        """Return True if the bird's Y is close enough to the gap center Y."""
+        if gap_center is None:
+            return False
+        # Require both vertical proximity and that the gap is close enough in X (in front of the bird)
+        y_ok = abs(self.pos_y - gap_center[1]) < self.GAP_REACHED_Y
+        x_ok = (self.pos_x - gap_center[0] < self.GAP_REACHED_X)
+        return y_ok and x_ok
+
+    def update_gap_queue(self, center, size, timestamp):
+        """Maintain an ordered queue of gaps (FIFO). Merge similar gaps and drop expired ones."""
+        # Drop invalid center
+        if center is None:
+            return
+
+        # Purge expired entries first
+        self.gap_queue = [g for g in self.gap_queue if (timestamp - g['t']) < self.GAP_TTL]
+
+        # If similar to an existing queued gap, refresh/merge it
+        for g in self.gap_queue:
+            if self.is_gap_similar(g['center'], center):
+                g['t'] = timestamp
+                g['size'] = max(g['size'], float(size))
+                return
+
+        # Otherwise append new gap to the queue
+        self.gap_queue.append({'center': np.array(center), 'size': float(size), 't': timestamp})
+
+        # Keep queue bounded
+        if len(self.gap_queue) > self.GAP_QUEUE_MAX:
+            self.gap_queue.pop(0)
 
     def scan_callback(self, msg):
         """
@@ -253,18 +332,106 @@ class FlyappyRos():
         else:
             self.obstacles = grid_obstacles.copy()
 
-        # Update Gap History
-        current_gap_center, current_gap_size = self.find_largest_gap(grid_obstacles)
-        self.gap_history.append((current_gap_center, current_gap_size, grid_obstacles.copy()))
+        # If forward path is blocked across several forward bins, trigger
+        # perturbation so the bird searches in Y beyond the LIDAR FOV.
+        try:
+            if self.check_forward_blocked():
+                if not self.perturbation_active:
+                    # pick a direction away from the obstacle cluster
+                    rel = self.obstacles.copy()
+                    rel[:, 0] -= self.pos_x
+                    front = rel[rel[:, 0] > 0]
+                    mean_y = np.mean(front[:, 1]) if len(front) > 0 else (self.Y_GROUND + self.Y_CEILING) / 2.0
+                    self.perturbation_direction = 1 if self.pos_y < mean_y else -1
+                    self.perturbation_active = True
+                    self.perturbation_frames = 0
+                    self.logger.info(f"FORWARD BLOCK DETECTED: enabling perturbation dir={self.perturbation_direction}")
+        except Exception:
+            pass
 
+        # Update Gap: compute current gap, push into queue, and maintain history
+        current_gap_center, current_gap_size = self.find_largest_gap(grid_obstacles)
+
+        # Update persistent queue of planned gaps
+        self.update_gap_queue(current_gap_center, current_gap_size, current_time)
+
+        # Maintain short-term history for fallback
+        self.gap_history.append((current_gap_center, current_gap_size, grid_obstacles.copy()))
         if len(self.gap_history) > 4:
             self.gap_history.pop(0)
-        
-        if len(self.gap_history) > 0:
-            max_gap = max(self.gap_history, key=lambda g: g[1] if g[0] is not None else -np.inf)
-            self.largest_gap_center, self.largest_gap_size = max_gap[0], max_gap[1]
+
+        # Purge expired queue entries (safety)
+        self.gap_queue = [g for g in self.gap_queue if (current_time - g['t']) < self.GAP_TTL]
+
+        # If head of queue is reached, mark reached time and only drop it after a wait interval
+        while len(self.gap_queue) > 0:
+            head = self.gap_queue[0]
+            if self.is_gap_reached(head['center']):
+                # set first-seen reached timestamp
+                if 'reached_t' not in head:
+                    head['reached_t'] = current_time
+                    break
+                # pop only if waited long enough
+                if (current_time - head['reached_t']) >= self.GAP_WAIT_AFTER_REACHED:
+                    # Mark gap as passed (we waited the required time while at the gap)
+                    try:
+                        gap_center = head.get('center', None)
+                    except Exception:
+                        gap_center = None
+                    self.gap_passed = True
+                    self.last_gap_pass_t = current_time
+                    if self.LOG_GAP_PASS:
+                        self.logger.info(f"GAP PASSED: center={gap_center} size={head.get('size',0):.2f} t={current_time:.2f}s")
+                    self.gap_queue.pop(0)
+                    continue
+                else:
+                    break
+            else:
+                # If gap is no longer reached, clear timestamp and stop
+                if 'reached_t' in head:
+                    del head['reached_t']
+                break
+
+        # Clear gap_passed after TTL so it only indicates recent pass
+        if self.last_gap_pass_t is not None and (current_time - self.last_gap_pass_t) > self.GAP_PASS_TTL:
+            self.gap_passed = False
+            self.last_gap_pass_t = None
+
+        # Prefer queue head as active target, fallback to history or current scan
+        if len(self.gap_queue) > 0:
+            head = self.gap_queue[0]
+            self.largest_gap_center, self.largest_gap_size = head['center'], head['size']
         else:
-            self.largest_gap_center, self.largest_gap_size = current_gap_center, current_gap_size
+            if len(self.gap_history) > 0:
+                max_gap = max(self.gap_history, key=lambda g: g[1] if g[0] is not None else -np.inf)
+                self.largest_gap_center, self.largest_gap_size = max_gap[0], max_gap[1]
+            else:
+                self.largest_gap_center, self.largest_gap_size = current_gap_center, current_gap_size
+
+        # Stuck detection: if all known gaps (queue + history + current) are <= threshold
+        sizes = []
+        if current_gap_size is not None:
+            sizes.append(float(current_gap_size))
+        sizes.extend([g['size'] for g in self.gap_queue])
+        sizes.extend([h[1] for h in self.gap_history if h[1] is not None])
+        max_detected_gap = max(sizes) if len(sizes) > 0 else 0.0
+
+        if max_detected_gap <= self.GAP_MIN_ACCEPT_SIZE:
+            self.stuck_counter += 1
+        else:
+            self.stuck_counter = 0
+            # clear perturbation when a valid gap appears
+            self.perturbation_active = False
+            self.perturbation_frames = 0
+
+        # If persistently stuck, enable perturbation to explore in Y
+        if self.stuck_counter > self.STUCK_FRAMES_TRIGGER:
+            if not self.perturbation_active:
+                # choose direction towards center to maximize chances
+                mid_y = (self.Y_GROUND + self.Y_CEILING) / 2.0
+                self.perturbation_direction = 1 if self.pos_y < mid_y else -1
+                self.perturbation_active = True
+                self.perturbation_frames = 0
 
         self.scan_received = True
 
@@ -300,22 +467,90 @@ class FlyappyRos():
         new_v = v + (dt / 6.0) * (k1_v + 2*k2_v + 2*k3_v + k4_v)
         return new_p, new_v
 
+    def check_forward_blocked(self):
+        """Return True if forward discretized bins are mostly occupied.
+
+        The method inspects `self.obstacles` relative to the bird position
+        and checks a set of forward x-bins. If a high fraction of bins
+        contain obstacles within a small lateral band around the bird's
+        current y, we treat the forward corridor as blocked and return True.
+        """
+        if len(self.obstacles) == 0:
+            return False
+
+        # Relative obstacle coordinates (bird is at pos_x)
+        rel = self.obstacles.copy()
+        rel[:, 0] -= self.pos_x
+
+        # Consider only obstacles in front
+        front = rel[rel[:, 0] > 0]
+        if len(front) == 0:
+            return False
+
+        # Discretize forward distances (meters from bird)
+        bins = np.linspace(self.FWD_BIN_START, self.FWD_BIN_END, self.FWD_BIN_COUNT)
+
+        occupied_bins = 0
+        # For each forward bin, check multiple vertical offsets. A bin is
+        # considered blocked only if ALL vertical offsets detect an obstacle
+        # within the small Y window (i.e., no free sub-band in that bin).
+        for bx in bins:
+            offset_blocked = True
+            for y_off in self.FWD_Y_OFFSETS:
+                target_y = self.pos_y + y_off
+                mask = (
+                    (front[:, 0] >= (bx - self.FWD_BIN_HALF_WIDTH)) &
+                    (front[:, 0] <= (bx + self.FWD_BIN_HALF_WIDTH)) &
+                    (np.abs(front[:, 1] - target_y) <= self.FWD_Y_WINDOW)
+                )
+                if not np.any(mask):
+                    # this vertical offset has free space in this bin
+                    offset_blocked = False
+                    break
+            if offset_blocked:
+                occupied_bins += 1
+
+        # If >= threshold of bins are blocked, consider forward corridor blocked
+        frac = occupied_bins / float(len(bins))
+        # Save diagnostics for logging
+        self.last_forward_block_frac = frac
+        self.last_occupied_bins = int(occupied_bins)
+        self.last_forward_bin_count = int(len(bins))
+        return frac >= self.FWD_BLOCKED_THRESHOLD
+
     def control_loop(self):
         """Main MPC Control Loop."""
         if not self.scan_received:
             return
 
+        # Lightly decay previous acceleration to allow commanded accelerations to ``dump'' over time
+        self.last_acc *= 0.7
+
         # ==========================================
         # 1. Action Sampling (Random Shooting)
         # ==========================================
-        # Biased sampling based on vertical position to avoid boundaries naturally
-        ax_samples = np.random.uniform(-0.3, self.SAFE_ACC_X, self.NUM_PATHS)
+        # Biased sampling based on gap target when available, otherwise fallback to positional biases
+        # Bias forward acceleration sampling toward reaching the desired `TARGET_VX`.
+        ax_mean = np.clip((self.TARGET_VX - self.current_vel[0]) * 1.5, -self.SAFE_ACC_X, self.SAFE_ACC_X)
+        ax_samples = np.clip(
+            np.random.normal(ax_mean, self.SAFE_ACC_X * 0.6, self.NUM_PATHS),
+            -self.SAFE_ACC_X, self.SAFE_ACC_X
+        )
 
-        if self.pos_y < (self.Y_GROUND + 0.2):
-            # Biased Upward
+        if self.largest_gap_center is not None:
+            # Bias vertical acceleration mean toward the gap center (proportional to vertical error)
+            gap_y = float(self.largest_gap_center[1])
+            gap_diff = gap_y - self.pos_y
+            mean_bias = np.clip(gap_diff * 1.2, -self.SAFE_ACC_Y, self.SAFE_ACC_Y)
+            ay_samples = np.clip(
+                np.random.normal(mean_bias, self.SAFE_ACC_Y * 0.45, self.NUM_PATHS),
+                -self.SAFE_ACC_Y, self.SAFE_ACC_Y
+            )
+        elif self.pos_y < (self.Y_GROUND + 0.2):
+            # Biased Upward near ground
             ay_samples = np.random.uniform(0.0, self.SAFE_ACC_Y, self.NUM_PATHS)
         elif self.pos_y > (self.Y_CEILING - 0.2):
-            # Biased Downward
+            # Biased Downward near ceiling
             ay_samples = np.random.uniform(-self.SAFE_ACC_Y, 0.0, self.NUM_PATHS)
         else:
             # Gaussian centered at 0 (Smooth Flight)
@@ -336,6 +571,9 @@ class FlyappyRos():
         v_x, v_y = np.full(self.NUM_PATHS, self.current_vel[0]), np.full(self.NUM_PATHS, self.current_vel[1])
         costs = np.zeros(self.NUM_PATHS)
         collision_mask = np.zeros(self.NUM_PATHS, dtype=bool)
+
+        # Track the minimum obstacle distance encountered along each rollout
+        min_dist_over_horizon = np.full(self.NUM_PATHS, np.inf)
 
         for t in range(self.HORIZON):
             # Vectorized Integration
@@ -366,9 +604,12 @@ class FlyappyRos():
                 min_dist_sq = np.min(dist_sq, axis=1)
                 min_dist = np.sqrt(min_dist_sq)
 
-                COLLISION_RADIUS = 0.1
-                collision_mask |= (min_dist < COLLISION_RADIUS)
-            
+                # update per-path minimum distance seen over the horizon
+                min_dist_over_horizon = np.minimum(min_dist_over_horizon, min_dist)
+
+                # Hard collision checks using class-level collision radius
+                collision_mask |= (min_dist < self.COLLISION_RADIUS)
+
                 hard_collision = min_dist < self.SAFETY_DIST
                 collision_mask |= hard_collision
 
@@ -389,13 +630,19 @@ class FlyappyRos():
             costs -= perturbation_reward
 
         # Gap Attraction (Commented out in original, kept for structure)
+        # default urgency (0..1). When a gap is present it's set below.
+        urgency_multiplier = 0.0
         if self.largest_gap_center is not None:
             gap_x, gap_y = self.largest_gap_center[0], self.largest_gap_center[1]
             dist_x = max(0.1, gap_x)
             urgency_multiplier = np.exp(-dist_x / 1.5)
             y_error_sq = (p_y - gap_y)**2
-            gap_dist_sq = self.Y_ERROR_WEIGHT * y_error_sq
+            # Apply urgency multiplier based on approximate forward distance to gap
+            gap_dist_sq = self.Y_ERROR_WEIGHT * y_error_sq * urgency_multiplier
             costs += gap_dist_sq
+            # Encourage forward progress toward the gap X coordinate (at horizon)
+            x_error_sq = (p_x - gap_x)**2
+            costs += urgency_multiplier * self.X_ERROR_WEIGHT * x_error_sq
 
         # Target Speed Penalty
         costs += (v_x - self.TARGET_VX)**2 * self.SPEED_X_WEIGHT
@@ -419,6 +666,26 @@ class FlyappyRos():
         
         effort = np.sum(controls**2, axis=1)
         costs += effort * self.EFFORT_WEIGHT
+
+        # Obstacle clearance cost: penalize rollouts that come close to obstacles
+        # Smaller min distances -> exponentially larger penalty. Scale penalty when
+        # committing to a gap (urgency_multiplier near 1) so the planner is more
+        # conservative during gap passes.
+        obstacle_cost = self.OBSTACLE_COST_WEIGHT * np.exp(-min_dist_over_horizon / 0.15)
+        # If the detected gap is large enough, reduce obstacle penalty scale so
+        # the planner can commit through the free opening. Otherwise remain
+        # conservative and penalize close passes heavily.
+        if self.largest_gap_size is not None and self.largest_gap_size > self.GAP_MIN_ACCEPT_SIZE:
+            obstacle_scale = 1.0 + 0.4 * urgency_multiplier
+        else:
+            obstacle_scale = 1.0 + 1.5 * urgency_multiplier
+        costs += obstacle_cost * obstacle_scale
+
+        # Reward forward progress: lower cost for trajectories that advance in X.
+        # Scale reward by urgency so we encourage forward commitment when approaching a gap.
+        forward_scale = 0.5 + 0.5 * urgency_multiplier
+        forward_reward = - self.FORWARD_REWARD_WEIGHT * (p_x * forward_scale)
+        costs += forward_reward
 
         # Select Best Trajectory
         best_idx = np.argmin(costs)
@@ -469,6 +736,23 @@ class FlyappyRos():
                 f"Acc: [{controls[best_idx][0]:.2f}, {controls[best_idx][1]:.2f}] | Cost: {costs[best_idx]:.1f}"
             )
 
+            # Detailed debug diagnostics for selected trajectory and forward-block status
+            try:
+                self.logger.debug(
+                    f"BestPathDebug: minDist={min_dist_over_horizon[best_idx]:.3f} "
+                    f"obsCost={obstacle_cost[best_idx]:.3f} "
+                    f"fwdBlockedFrac={self.last_forward_block_frac:.2f} "
+                    f"occBins={self.last_occupied_bins}/{self.last_forward_bin_count}"
+                )
+            except Exception:
+                pass
+
+            if self.gap_passed:
+                try:
+                    self.logger.debug(f"GAP_PASSED active t={self.last_gap_pass_t:.2f}")
+                except Exception:
+                    self.logger.debug("GAP_PASSED active")
+
             self.fig.canvas.draw()
             self.fig.canvas.flush_events()
 
@@ -483,13 +767,23 @@ class FlyappyRos():
         ceiling_dist = self.Y_CEILING - self.pos_y
 
         if ground_dist < CRITICAL_DISTANCE or ceiling_dist < CRITICAL_DISTANCE:
-            alpha = 0.5  # Emergency: faster response
+            alpha = 0.6  # Emergency: faster response
             self.logger.warn(f"EMERGENCY MODE: Ground={ground_dist:.3f}m, Ceiling={ceiling_dist:.3f}m")
         else:
-            alpha = 0.25  # Normal: smoother response
+            alpha = 0.5  # Normal: smoother response (increased to allow faster dumping)
 
         # Low-pass filter
         final_acc = (alpha * best_acc) + ((1.0 - alpha) * self.last_acc)
+
+        # If perturbation is active, nudge the Y acceleration to explore for gaps
+        if self.perturbation_active:
+            PERTURB_ACC = 0.25
+            final_acc[1] += PERTURB_ACC * self.perturbation_direction
+            # Progress frame counter and flip direction periodically to avoid bias
+            self.perturbation_frames += 1
+            if self.perturbation_frames > self.PERTURBATION_DURATION:
+                self.perturbation_direction *= -1
+                self.perturbation_frames = 0
 
         # Safety Clamping
         final_acc[0] = np.clip(final_acc[0], -self.SAFE_ACC_X, self.SAFE_ACC_X)
