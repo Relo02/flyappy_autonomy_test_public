@@ -134,9 +134,12 @@ Short summary of experiments and observed outcomes:
 
 ### Video proof:
 
-```
+You can preview a compressed MP4 (better for GitHub rendering) and the original GIF as fallback:
+
+- MP4 (recommended): [results/mpc_planner.mp4](../results/mpc_planner.mp4)
+- GIF (fallback):
+
 ![MPC Planner Demo](../flyappy_autonomy_code_py/gif/mpc_planner.gif)
-```
 
 ## 9. Plotting & diagnostics
 
