@@ -136,38 +136,13 @@ Short summary of experiments and observed outcomes:
 
 You can preview a compressed MP4 (better for GitHub rendering) and the original GIF as fallback:
 
-- MP4 (recommended): [results/mpc_planner.mp4](../results/mpc_planner.mp4)
-- GIF (fallback):
+GIF (fallback):
 
 ![MPC Planner Demo](../flyappy_autonomy_code_py/gif/mpc_planner.gif)
 
-## 9. Plotting & diagnostics
-
-The node already produces several on-node plot elements (Matplotlib interactive):
-
-- `occupied_plot`: raw grid-occupied cells
-- `inflated_plot`: inflated obstacle positions used for collision checks
-- `free_plot`: free-space samples
-- `best_path_plot`: planner's selected trajectory over the horizon
-- `bird_plot`: current bird pose (Y)
-- `gap_plot`: selected gap center marker
-
-To save the current figure from the running node, modify `flyappy_ros.py` to call `self.fig.savefig('results/current_viz.png')` at the desired point in the control loop, or use the interactive window menu to save.
-
-Recommended diagnostic logs to enable while tuning (set rclpy logger level to DEBUG):
-
-- `BestPathDebug` lines (min-distance along best path, obstacle cost, forward-block fraction, occupied bins)
-- `GAP_PASSED` events to confirm gap traversal
-
-Example: run the node and enable debug logging. Then after a short run generate plots of:
-
-- Histogram of `min_dist_over_horizon` across chosen best paths
-- Time-series of forward speed `v_x` and commanded `a_x` / `a_y`
-- Scatter of inflated obstacles & best path overlay (saved figure)
-
 ---
 
-## 10. Conclusions & trade-offs (precision vs speed)
+## 9. Conclusions & trade-offs (precision vs speed)
 
 For the project goal — maximizing forward speed while surviving for one minute and passing through asteroids — the planner must balance two competing objectives:
 
@@ -182,9 +157,14 @@ I've choosen sampling-based MPC for its good robustness against modeling errors,
 
 ---
 
-## 11. Next steps & improvements
+## 10. Next steps & improvements
 
-A good approach ti improve the planning performances, we can adopt RL techniques to learn a better planning policy that can guide the sampling distribution toward better candidate rollouts.
+Reinforcement learning (RL) can practically complement the sampling-based MPC in several ways, with the a following pipeline implementation that can be used:
+
+1. Bootstrap: collect MPC rollouts and label the best-rollout actions (state → best (ax,ay)) to build an offline dataset.
+2. Behavior cloning (BC): train a lightweight policy on the dataset for fast inference and good initialization.
+3. Fine-tune with online RL (PPO or SAC) in simulation to improve performance and adapt to unseen layouts.
+4. Hybrid integration: use the trained policy to bias MPC sampling (policy proposes high-probability samples) and keep MPC as a safety filter (policy proposes, MPC vetoes).
 
 ---
 
