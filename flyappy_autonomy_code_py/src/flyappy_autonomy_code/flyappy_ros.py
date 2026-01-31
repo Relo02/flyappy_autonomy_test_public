@@ -1,7 +1,15 @@
 import rclpy
 from rclpy.node import Node
 import numpy as np
+import os
+
+# Check for display availability before importing matplotlib.pyplot
+_HEADLESS = os.environ.get('DISPLAY') is None
+if _HEADLESS:
+    import matplotlib
+    matplotlib.use('Agg')  # Non-interactive backend for headless systems
 import matplotlib.pyplot as plt
+
 from geometry_msgs.msg import Vector3
 from sensor_msgs.msg import LaserScan
 from .probabilistic_grid_map import ProbabilisticGridMap
@@ -145,9 +153,13 @@ class FlyappyRos():
         # 5. Mapping & Visualization
         # ==========================================
         self.grid_map = ProbabilisticGridMap(logger=self.logger)
-        
+
+        # Check for headless mode (no display)
+        self._headless = _HEADLESS
+
         # Plotting Setup
-        plt.ion()
+        if not self._headless:
+            plt.ion()
         self.fig, self.ax = plt.subplots(figsize=(10, 6))
         
         # Graphical Elements
@@ -753,8 +765,9 @@ class FlyappyRos():
                 except Exception:
                     self.logger.debug("GAP_PASSED active")
 
-            self.fig.canvas.draw()
-            self.fig.canvas.flush_events()
+            if not self._headless:
+                self.fig.canvas.draw()
+                self.fig.canvas.flush_events()
 
         # ==========================================
         # 5. Command Smoothing & Execution

@@ -23,7 +23,7 @@ class InstallWithScriptsCopy(install):
 
         if os.path.exists(bin_dir):
             for script in os.listdir(bin_dir):
-                if script.startswith('flyappy_autonomy_code_node') or script.startswith('flyappy_dwa_controller') or script.startswith('gap_visualizer'):
+                if script.startswith('flyappy_autonomy_code_node'):
                     src = os.path.join(bin_dir, script)
                     dst = os.path.join(lib_dir, script)
                     shutil.copy2(src, dst)
@@ -42,13 +42,10 @@ setup(
         # Install config files
         ('share/' + package_name + '/config', glob('config/*.yaml')),
     ],
-    install_requires=['setuptools', 'rclpy', 'nav2_msgs', 'numpy', 'casadi', 'scikit-learn', 'matplotlib'],
+    install_requires=['setuptools', 'rclpy', 'numpy', 'matplotlib'],
     entry_points={
         'console_scripts': [
             'flyappy_autonomy_code_node = flyappy_autonomy_code.flyappy_autonomy_code_node:main',
-            'flyappy_dwa_controller = flyappy_autonomy_code.flyappy_dwa_controller:main',
-            'gap_visualizer = flyappy_autonomy_code.gap_visualizer:main',
-            'flyappy_foa_controller = flyappy_autonomy_code.flyappy_foa:main',
         ],
     },
     cmdclass={
