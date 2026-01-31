@@ -185,7 +185,6 @@ Reinforcement learning (RL) can practically complement the sampling-based MPC in
 ## How to run
 
 ```bash
-# source your ROS2 distro (example)
 source /opt/ros/jazzy/setup.bash
 colcon build --packages-select flyappy_autonomy_code_py
 source install/setup.bash
