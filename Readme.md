@@ -182,9 +182,6 @@ Reinforcement learning (RL) can practically complement the sampling-based MPC in
 
 ---
 
-
----
-
 ## How to run
 
 ```bash
