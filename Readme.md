@@ -1,4 +1,4 @@
-# MPC Path Planner and Probabilistic Grid Map — Implementation Report
+# MPC Path Planner and Probabilistic Grid Map
 
 This document summarizes the design and implementation details of the sampling-based Model Predictive Controller (MPC) used for the Flyappy agent, the Probabilistic Grid Map used for obstacle memory and inflation, mathematical formulation, observed results, plotting/diagnostics, and concluding remarks about trade-offs between precision and speed.
 
